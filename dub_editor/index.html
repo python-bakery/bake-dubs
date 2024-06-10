@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <title>Edit Dubs</title>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.0.2/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-EVSTQN3/azprG1Anm3QDgpJLIm9Nao0Yz1ztcQTwFspd3yD65VohhpuuCOmLASjC" crossorigin="anonymous">
+
+  <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.6.0/jquery.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.0.2/dist/js/bootstrap.bundle.min.js" integrity="sha384-MrcW6ZMFYlzcLA8Nl+NtUVF0sA7MsXsP1UyJoMp4YLEuNSfAP+JcXn/tWtIaxVXM" crossorigin="anonymous"></script>
+
+  <script src="WebAudioRecorder.min.js"></script>
+
+  <script>
+  
+  voices = [];
+  dubs = {};
+  usage = {};
+  editingDubs = {};
+  defaultVoiceName = 'amy';
+  defaultVoice = {};
+  
+  async function reloadVoices() {
+    const data = await fetch('voices');
+    voices = (await data.json()).voices;
+    
+    const voiceSelect = $("#voice-select");
+    voiceSelect.find("option").remove();
+    voices.forEach(voice => addVoiceToSelect(voice));
+    
+    return voices;
+  }
+  
+  function addVoiceToSelect(voice) {
+    $("#voice-select").append($(`<option value='${voice}'>${voice}</option>`));
+  }
+  
+  async function reloadDubs() {
+    const data = await fetch('dubs/');
+    dubs = await data.json();
+    
+    
+    const dubTable = $("#dub-table");
+    dubTable.find("tbody tr").remove();
+    Object.entries(dubs).forEach(([code, text], index) => {
+        dubTable.find("tbody").append($(`<tr id="row-${code}">
+            <td>${text}<br><small><code>${code}.mp3</code></small></td>
+            <td>${makeAudio(defaultVoiceName, code, true, true)}</td>
+            <td id="dub-voice-${code}"></td>
+        </tr>`));
+    });
+    return dubs;
+  }
+
+  function delayedMakeAudio(voice, code, canPlay) {
+    $(`#audio-${voice}-${code}`).replaceWith($(makeAudio(voice, code, canPlay)))
+  }
+  
+  function makeAudio(voice, code, canPlay, delayLoad) {
+    if (delayLoad) {
+      const call = `delayedMakeAudio(${JSON.stringify(voice)}, ${JSON.stringify(code)}, ${JSON.stringify(canPlay)})`;
+      if (canPlay) {
+        return `<span id="audio-${voice}-${code}" class='badge bg-info' onclick='${call}'>Load</span>`;
+      } else {
+        return `<span id="audio-${voice}-${code}" class="no-recording-marker"></span>`;
+      }
+      
+    } else if (canPlay) {
+      return `<audio controls id="audio-${voice}-${code}">
+                <source src="audio/${voice}/${code}" type="audio/mpeg">
+                Your browser does not support the audio tag.
+            </audio>`
+    } else {
+      return makeBlankAudio(voice, code);
+    }
+  }
+
+  function makeBlankAudio(voice, code) {
+    return `<audio id="audio-${voice}-${code}" disabled></audio>`;
+  }
+
+  var recordingTarget = null, sendData=null;
+  async function makeRecorder(voice, code, canPlay) {
+    html = `<div>
+        <button id="record-voice-${code}" class="btn btn-info record-dub-btn" data-recording="false">Record</button>
+        <button id="cancel-voice-${code}" class="btn btn-warning cancel-dub-btn" disabled>Cancel</button>
+        <button id="delete-voice-${code}" class="btn btn-danger delete-dub-btn" style='float: right'>Delete</button><br><br>
+        ${makeAudio(voice, code, canPlay, true)}
+    </div>`;
+    $(`#dub-voice-${code}`).html(html);
+    const saveRecording = async (data) => {
+      console.log("Saving code", code, "for", voice, data);
+      const formData = new FormData();  
+      formData.append("upload", data, "${voice}_${code}.wav");
+      formData.append("voice", voice);
+      formData.append("code", code);
+      //const headers = new Headers();
+      //headers.append("Content-Type", "multipart/form-data")
+      const response = await fetch("upload", {
+        method: "POST",
+        body: formData,
+      });
+      try {
+        const data = await response.json();
+        if (data.success) {
+          console.log("Saved successfully!");
+          const [voice, code] = recordingTarget;
+          $(`#audio-${voice}-${code}`).replaceWith($(makeAudio(voice, code, true, false)))
+          /*const recordedAudio = document.getElementById(recordingTarget);
+          recordedAudio.src = data.url;
+          recordedAudio.controls = true;
+          recordedAudio.disabled = false;*/
+        } else {
+          console.error(data);
+          alert("Failed to save to file system!\n"+data.message);
+        }
+      } catch (e) {
+        console.error(e);
+        alert(e);
+      }
+    };
+    const stopRecording = () => {
+      $(".record-dub-btn").prop('disabled', false);
+      $(`#cancel-voice-${code}`).prop('disabled', true);
+      $(`.delete-dub-btn`).prop('disabled', false);
+      $(`#record-voice-${code}`).text("Record");
+      GLOBAL_RECORDER.stop();
+    }
+    $(`#record-voice-${code}`).on('click', function (e) {
+      const isRecording = $(this).data('recording');
+      if (isRecording) {
+        stopRecording();
+      } else {
+        $(".record-dub-btn").prop('disabled', true);
+        $(`.delete-dub-btn`).prop('disabled', true);
+        $(`#cancel-voice-${code}`).prop('disabled', false);
+        $(this).prop('disabled', false);
+        $(this).text("Finish Recording");
+        recordingTarget = [voice, code]; //`audio-${voice}-${code}`;
+        sendData = saveRecording;
+        GLOBAL_RECORDER.start();
+      }
+      $(this).data('recording', !isRecording);
+    });
+    $(`#cancel-voice-${code}`).on('click', function (e) {
+      sendData = null;
+      stopRecording();
+      $(`#record-voice-${code}`).data('recording', false);
+    });
+    $(`#delete-voice-${code}`).on('click', async function (e) {
+      if (confirm(`Are you sure you want to delete ${voice}/${code}?`)) {
+        try {
+          const result = await fetch(`delete/${voice}/${code}`);
+          $(`#audio-${voice}-${code}`).replaceWith($(makeBlankAudio(voice, code)))
+          //$(`#audio-${voice}-${code}`).empty().prop("controls", false).prop('disabled', true);
+        } catch (e) {
+          alert(`Failed to delete ${voice}/${code}:\n${e}`);
+          console.error(e);
+        }
+      }
+    });
+  }
+
+  var GLOBAL_RECORDER, audioChunks = [];
+  function handleStreamingAudio(stream) {
+    GLOBAL_RECORDER = new MediaRecorder(stream);
+    GLOBAL_RECORDER.ondataavailable = e => {
+      audioChunks.push(e.data);
+      if (GLOBAL_RECORDER.state == "inactive"){
+        if (sendData) {
+          let blob = new Blob(audioChunks,{type:'audio/mpeg-3'});
+          /*const recordedAudio = document.getElementById(recordingTarget);
+          recordedAudio.src = URL.createObjectURL(blob);
+          recordedAudio.controls = true;
+          recordedAudio.autoplay = false;
+          recordedAudio.disabled = false;*/
+          sendData(blob);
+        }
+        audioChunks = [];
+      }
+    }
+  }
+
+  navigator.mediaDevices.getUserMedia({audio: true}).then(stream => {handleStreamingAudio(stream)});
+  
+  async function loadVoice(name) {
+    const data = await fetch(`dubs/${name}`);
+    return await data.json();
+  }
+  
+  async function newVoice(name) {
+    const data = await fetch(`new/voice/${name}`);
+    const result = await data.json();
+    if (result.success) {
+        addVoiceToSelect(name);
+    }
+  }
+  
+  async function deleteVoice(name) {
+    const data = await fetch(`delete/voice/${name}`);
+    const result = await data.json();
+    if (result.success) {
+        $(`#voice-select option[value='${name}']`).remove();
+        await rebuildDubColumn();
+    }
+  }
+
+  async function rebuildDubColumn() {
+    const chosen = $("#voice-select").val();
+    if (chosen !== defaultVoiceName) {
+      const editingDubs = (await loadVoice(chosen)).dubs || [];
+      console.log(editingDubs, dubs);
+      Object.keys(dubs).forEach(code => {
+        const canPlay = editingDubs.includes(code+".mp3");
+        makeRecorder(chosen, code, canPlay);
+      });
+    }
+  }
+
+  function hideUnused() {
+    const used = Object.keys(usage);
+    const entire = Object.keys(dubs);
+    const unused = entire.filter(code => !used.includes(code));
+    unused.forEach((code) => {
+        $(`#row-${code}`).hide();
+    })
+  }
+
+  function attachUsage() {
+
+  }
+
+  async function loadUsage() {
+    const data = await fetch('usage/');
+    usage = (await data.json());
+    hideUnused();
+  }
+  
+  $(document).ready(async () => {
+    dubs = await reloadDubs();
+    voices = await reloadVoices();
+    defaultVoice = await loadVoice(defaultVoiceName);
+    loadUsage();
+    console.log(defaultVoice);
+    
+    $("#add-voice").on('click', async () => {
+        const name = prompt("What will you name the new voice?");
+        if (name != null) {
+            await newVoice(name);
+        }
+    });
+    $("#sub-voice").on("click", async () => {
+      const chosen = $("#voice-select").val();
+      if (chosen === defaultVoiceName) {
+          alert("Cannot delete the amy voice!");
+          return;
+      }
+      if (confirm(`Are you sure you want to delete the ${chosen} voice?`)) {
+          await deleteVoice(chosen);
+      }
+    });
+    $("#voice-select").on('change', async () => {
+      await rebuildDubColumn();
+    });
+
+    $("#move-not-recorded-to-end").on('click', () => {
+      const dubTable = $("#dub-table");
+      const noRecording = dubTable.find("tbody tr").has(".no-recording-marker");
+      noRecording.detach().appendTo(dubTable.find("tbody"));
+    });
+
+    $("#show-unused").on('change', function(){
+      if (this.checked) {
+        $("#dub-table tbody tr").show();
+      } else {
+        hideUnused();
+      }
+    })
+
+  });
+  </script>
+</head>
+<body>
+
+<div class="container-fluid">
+    <div class="row">
+        <div class="col">
+            <button class="btn btn-outline-secondary">Reload Voices</button>
+            <button class="btn btn-outline-secondary">Reload Dubs</button>
+            <button class="btn btn-outline-secondary" id="move-not-recorded-to-end">Move Not Recorded to End</button>
+            <input type="checkbox" id="show-unused"> Show Unused</input>
+        </div>
+    </div>
+    <div class="row">
+        <div class="form-horizontal">
+        <div class="form-group">
+          <label class="col-sm-3 control-label">Audio input</label>
+          <div class="col-sm-3">
+            <select id="audio-in-select" class="form-control"></select>
+          </div>
+          <div class="col-sm-3">
+            <input id="audio-in-level" type="range" min="0" max="100" value="0" class="hidden">
+          </div>
+        </div>
+    </div>
+  <div class="row content">
+    <div class="col">
+        <table class="table table-bordered table-striped table-condensed" id="dub-table">
+            <thead>
+                <td class="col-4">Text</td>
+                <td class="col-4">Amy</td>
+                <td class="col-4">
+                    <select id="voice-select"></select>
+                    <button id="add-voice" class="btn btn-primary btn-sm">+</button>
+                    <button id="sub-voice" class="btn btn-danger btn-sm">-</button>
+                </td>
+            </thead>
+            <tbody></tbody>
+        </table>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>

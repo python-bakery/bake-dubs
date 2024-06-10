@@ -1,0 +1,86 @@
+<script>
+// Stolen stuff from web audio recorder demo
+  var audioIn, audioContext, $audioInSelect, mixer;
+  navigator.getUserMedia = navigator.getUserMedia || navigator.webkitGetUserMedia || navigator.mozGetUserMedia || navigator.msGetUserMedia;
+  audioContext = new AudioContext;
+  if (audioContext.createScriptProcessor == null) {
+    audioContext.createScriptProcessor = audioContext.createJavaScriptNode;
+  }
+  mixer = audioContext.createGain();
+
+  audioRecorder = new WebAudioRecorder(mixer, {
+    workerDir: './',
+    onEncoderLoading: function(recorder, encoding) {
+      console.log((encoding.toUpperCase()) + " encoder ...");
+    }
+  });
+  $(document).ready(()=>{
+    $audioInSelect = $('#audio-in-select');
+    
+    onGotDevices = function(devInfos) {
+        var index, info, name, options, _i, _len;
+        options = '<option value="no-input" selected>(No input)</option>';
+        index = 0;
+        for (_i = 0, _len = devInfos.length; _i < _len; _i++) {
+            info = devInfos[_i];
+            if (info.kind !== 'audioinput') {
+                continue;
+            }
+            name = info.label || ("Audio in " + (++index));
+            options += "<option value=" + info.deviceId + ">" + name + "</option>";
+        }
+        $audioInSelect.html(options);
+    };
+    
+    onGotAudioIn = function(stream) {
+        if (audioIn != null) {
+          audioIn.disconnect();
+        }
+        audioIn = audioContext.createMediaStreamSource(stream);
+        audioIn.connect(audioInLevel);
+        return;
+      };
+
+      onChangeAudioIn = function() {
+        var constraint, deviceId;
+        deviceId = $audioInSelect[0].value;
+        if (deviceId === 'no-input') {
+          if (audioIn != null) {
+            audioIn.disconnect();
+          }
+          audioIn = void 0;
+          $audioInLevel.addClass('hidden');
+        } else {
+          if (deviceId === 'default-audio-input') {
+            deviceId = void 0;
+          }
+          constraint = {
+            audio: {
+              deviceId: deviceId != null ? {
+                exact: deviceId
+              } : void 0
+            }
+          };
+          if ((navigator.mediaDevices != null) && (navigator.mediaDevices.getUserMedia != null)) {
+            navigator.mediaDevices.getUserMedia(constraint).then(onGotAudioIn)["catch"](function(err) {
+              return alert("Could not get audio media device: " + err);
+            });
+          } else {
+            navigator.getUserMedia(constraint, onGotAudioIn, function() {
+              return alert("Could not get audio media device: " + err);
+            });
+          }
+        }
+      };
+
+      $audioInSelect.on('change', onChangeAudioIn);
+      
+      if ((navigator.mediaDevices != null) && (navigator.mediaDevices.enumerateDevices != null)) {
+        navigator.mediaDevices.enumerateDevices().then(onGotDevices)["catch"](function(err) {
+          return onError("Could not enumerate audio devices: " + err);
+        });
+    } else {
+        $audioInSelect.html('<option value="no-input" selected>(No input)</option><option value="default-audio-input">Default audio input</option>');
+    }
+  });
+</script>
